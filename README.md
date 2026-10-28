@@ -14,7 +14,15 @@ python -m pip install -r requirements.txt
 python import_excel.py "C:\\경로\\토스뱅크_거래내역.xlsx" --db "toss_transactions.db"
 ```
 
-토스뱅크의 암호화된 원본 엑셀을 사용하면 프로그램 실행 시 암호를 입력받습니다.
+토스뱅크의 암호화된 엑셀은 프로젝트 폴더의 `.env`에서 암호를 자동으로 읽습니다.
+
+1. `.env.example`을 복사해 프로젝트 루트에 `.env` 파일을 만듭니다.
+2. `.env` 파일의 `TOSS_EXCEL_PASSWORD=` 뒤에 본인의 엑셀 암호를 기입합니다.
+3. 평소처럼 `python import_excel.py "토스뱅크_거래내역.xlsx"`를 실행합니다.
+
+`.env`에 암호가 없으면 기존처럼 실행 중 암호를 입력받습니다.
+`.env`는 Git에서 제외되고, 저장소에는 값이 비어 있는 `.env.example`만 올라갑니다.
+운영체제 환경변수 `TOSS_EXCEL_PASSWORD`를 설정했다면 그 값을 우선 사용합니다.
 **암호를 소스코드·GitHub·명령어에 기록하지 마세요.**
 
 ```text
