@@ -1,0 +1,2 @@
+# Required for password-encrypted Toss Bank XLSX. Decrypted XLSX works without this dependency.
+msoffcrypto-tool>=5,<6
