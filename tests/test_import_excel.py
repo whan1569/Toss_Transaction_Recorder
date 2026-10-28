@@ -1,11 +1,13 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from xml.etree.ElementTree import Element, SubElement, tostring
 from zipfile import ZipFile
 
-from import_excel import import_excel
+from import_excel import _get_excel_password, import_excel
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
@@ -50,6 +52,20 @@ class ImportTransactionsTest(unittest.TestCase):
     def count(self):
         with sqlite3.connect(self.db) as db:
             return db.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+
+    def test_dotenv_password_is_loaded_without_prompt(self):
+        (self.root / ".env").write_text("TOSS_EXCEL_PASSWORD=local-test-password\n", encoding="utf-8")
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("import_excel.__file__", str(self.root / "import_excel.py")), \
+             patch("import_excel.getpass", side_effect=AssertionError("unexpected password prompt")):
+            self.assertEqual(_get_excel_password(), "local-test-password")
+
+    def test_environment_variable_takes_precedence_over_dotenv(self):
+        (self.root / ".env").write_text("TOSS_EXCEL_PASSWORD=local-test-password\n", encoding="utf-8")
+        with patch.dict(os.environ, {"TOSS_EXCEL_PASSWORD": "configured-password"}, clear=True), \
+             patch("import_excel.__file__", str(self.root / "import_excel.py")), \
+             patch("import_excel.getpass", side_effect=AssertionError("unexpected password prompt")):
+            self.assertEqual(_get_excel_password(), "configured-password")
 
     def test_same_file_twice_is_noop(self):
         synthetic_excel(self.first, [self.row1, self.row2])
