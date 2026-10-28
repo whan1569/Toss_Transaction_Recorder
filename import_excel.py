@@ -74,6 +74,16 @@ def _text(value: object) -> str | None:
     return stripped or None
 
 
+def _get_excel_password() -> str:
+    """Load the local .env without overriding a separately configured environment variable."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError as exc:
+        raise RuntimeError(".env 사용을 위해 'pip install -r requirements.txt'를 실행하세요.") from exc
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
+    return os.environ.get("TOSS_EXCEL_PASSWORD") or getpass("엑셀 암호 (화면에 표시되지 않음): ")
+
+
 def _read_excel_zip(input_path: Path) -> bytes:
     """Return raw XLSX bytes; decrypt only if the file is Office-encrypted."""
     data = input_path.read_bytes()
@@ -85,7 +95,7 @@ def _read_excel_zip(input_path: Path) -> bytes:
         import msoffcrypto
     except ImportError as exc:
         raise RuntimeError("암호화된 엑셀은 'pip install -r requirements.txt' 실행 후 가져올 수 있습니다.") from exc
-    password = os.environ.get("TOSS_EXCEL_PASSWORD") or getpass("엑셀 암호 (화면에 표시되지 않음): ")
+    password = _get_excel_password()
     if not password:
         raise ValueError("암호가 입력되지 않았습니다.")
     source = BytesIO(data)
