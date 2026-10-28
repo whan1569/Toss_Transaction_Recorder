@@ -20,6 +20,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+from receipt_export import ensure_receipt_schema
 from xml.etree import ElementTree as ET
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
@@ -243,6 +244,7 @@ def import_excel(excel_path: Path, db_path: Path) -> tuple[int, int, int]:
     with sqlite3.connect(db_path, timeout=30) as db:
         db.execute("PRAGMA busy_timeout = 30000")
         db.executescript(CREATE_SQL)
+        ensure_receipt_schema(db)
         db.execute("BEGIN IMMEDIATE")
         try:
             for record in records:
