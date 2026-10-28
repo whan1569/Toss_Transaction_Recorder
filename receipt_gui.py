@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from receipt_export import _db_connect, _yesterday_seoul, export_receipts, prepare_receipt
+from receipt_export import _db_connect, _yesterday_seoul, export_receipts, prepare_receipt, reset_unissued
 
 
 class ReceiptApp(tk.Tk):
@@ -75,6 +75,7 @@ class ReceiptApp(tk.Tk):
             ttk.Entry(edit, textvariable=var, width=24).grid(row=row, column=col+1, sticky="ew", pady=3, padx=(0, 10))
         edit.columnconfigure(1, weight=1)
         edit.columnconfigure(3, weight=1)
+        ttk.Button(edit, text="미발급 거래 재작업", command=self.reset_export).grid(row=4, column=4, sticky="e")
         ttk.Button(edit, text="선택 거래 저장", command=self.save_receipt).grid(row=4, column=5, sticky="e", padx=(15, 0))
         ttk.Label(edit, text="세액은 자동 계산하지 않습니다. 홈택스 공식 양식과 사업자의 과세기준을 확인한 금액만 입력하세요.",
                   wraplength=970).grid(row=5, column=0, columnspan=6, sticky="w", pady=(9, 0))
@@ -163,6 +164,22 @@ class ReceiptApp(tk.Tk):
             messagebox.showinfo("저장 완료", "발급정보를 DB에 저장했습니다. 아직 현금영수증을 발급하지 않았습니다.")
         except (OSError, ValueError) as exc:
             messagebox.showerror("저장 실패", str(exc))
+
+    def reset_export(self) -> None:
+        if self.selected_id is None:
+            messagebox.showwarning("거래 선택", "거래를 먼저 선택하세요.")
+            return
+        if not messagebox.askyesno("미발급 확인", "홈택스에서 이 거래의 현금영수증이 실제로 발급되지 않았음을 확인했나요?\n발급 완료된 거래를 다시 제출하면 중복발급이 발생할 수 있습니다."):
+            return
+        reason = simpledialog.askstring("재작업 사유", "홈택스 검증 실패 등 미발급 재작업 사유를 입력하세요.", parent=self)
+        if not reason:
+            return
+        try:
+            reset_unissued(Path(self.db_path.get()), self.selected_id, reason)
+            self.reload()
+            messagebox.showinfo("재작업 준비", "미발급 확인 거래를 PENDING 상태로 되돌렸습니다. 발급정보를 수정한 뒤 다시 내보내세요.")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("재작업 실패", str(exc))
 
     def export(self) -> None:
         if not self.template_path.get():

@@ -1,5 +1,6 @@
 """No real bank details, customer identifiers or Hometax credentials in tests."""
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 from receipt_export import (ensure_receipt_schema, prepare_receipt, export_receipts,
-                            confirm_issued, SHEET_NS)
+                            confirm_issued, reset_unissued, SHEET_NS)
 
 M = "{" + SHEET_NS + "}"
 
@@ -53,7 +54,7 @@ class ReceiptExportTest(unittest.TestCase):
         self.db = self.root / "transactions.db"
         self.template = self.root / "official_example.xlsx"
         self.output = self.root / "hometax_output.xlsx"
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("CREATE TABLE transactions (id INTEGER PRIMARY KEY, transaction_at TEXT, amount_krw INTEGER NOT NULL)")
             conn.executemany("INSERT INTO transactions VALUES (?, ?, ?)", [
                 (1, "2026-10-27T17:11:00", 30000),
@@ -68,7 +69,7 @@ class ReceiptExportTest(unittest.TestCase):
                         supply=27273, vat=2727, memo="주문 1")
 
     def test_non_destructive_schema_and_defaults(self):
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             ensure_receipt_schema(conn)
             ensure_receipt_schema(conn)
             row = conn.execute("SELECT receipt_requested,is_gmt_sale,receipt_status FROM transactions WHERE id=1").fetchone()
@@ -90,12 +91,12 @@ class ReceiptExportTest(unittest.TestCase):
         with ZipFile(self.output) as zf:
             self.assertEqual(zf.read("xl/worksheets/sheet2.xml"), b"<worksheet>keep intact</worksheet>")
             self.assertNotIn(b"<f>", zf.read("xl/worksheets/sheet1.xml"))
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             self.assertEqual(conn.execute("SELECT receipt_status,receipt_issued_at,receipt_approval_no FROM transactions WHERE id=1").fetchone(), ("EXPORTED", None, None))
         with self.assertRaisesRegex(ValueError, "발급 준비된"):
             export_receipts(self.db, self.template, self.root / "again.xlsx", through="2026-10-27")
         confirm_issued(self.db, 1, "SYNTHETIC-APPROVAL", "2026-10-28")
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             self.assertEqual(conn.execute("SELECT receipt_status,receipt_approval_no,receipt_issued_at FROM transactions WHERE id=1").fetchone(), ("ISSUED", "SYNTHETIC-APPROVAL", "2026-10-28"))
 
     def test_request_false_excluded_even_if_gmt_sale(self):
@@ -129,6 +130,19 @@ class ReceiptExportTest(unittest.TestCase):
             prepare_receipt(self.db, 1, requested=0)
         self.assertEqual(export_receipts(self.db, self.template, self.root / "retry.xlsx",
                                          through="2026-10-27", retry_exported=True), 1)
+
+    def test_reset_requires_unissued_and_never_resets_issued(self):
+        self._fill_first()
+        export_receipts(self.db, self.template, self.output, through="2026-10-27")
+        reset_unissued(self.db, 1, "홈택스 파일검증 오류 - 미발급 확인")
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            self.assertEqual(conn.execute("SELECT receipt_status, receipt_reset_reason FROM transactions WHERE id=1").fetchone(),
+                             ("PENDING", "홈택스 파일검증 오류 - 미발급 확인"))
+        prepare_receipt(self.db, 1, supply=30000, vat=0)
+        export_receipts(self.db, self.template, self.output, through="2026-10-27")
+        confirm_issued(self.db, 1, "SYNTHETIC-APPROVAL", "2026-10-28")
+        with self.assertRaisesRegex(ValueError, "재작업"):
+            reset_unissued(self.db, 1, "잘못된 재작업")
 
     def test_missing_or_wrong_template_rejected(self):
         self._fill_first()

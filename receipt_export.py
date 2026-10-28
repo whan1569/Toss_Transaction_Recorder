@@ -7,6 +7,7 @@ No payment is assumed to be GMT revenue until explicitly confirmed.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -37,6 +38,8 @@ RECEIPT_COLUMNS = {
     "receipt_issued_at": "TEXT",
     "receipt_confirmed_at": "TEXT",
     "receipt_approval_no": "TEXT",
+    "receipt_reset_at": "TEXT",
+    "receipt_reset_reason": "TEXT",
 }
 
 
@@ -51,19 +54,25 @@ def ensure_receipt_schema(db: sqlite3.Connection) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_receipt_export ON transactions(is_gmt_sale, receipt_requested, receipt_status, transaction_at)")
 
 
-def _db_connect(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _db_connect(db_path: Path):
+    """Commit/rollback and ALWAYS close SQLite, including on a failed export."""
     if not db_path.is_file():
         raise FileNotFoundError(f"거래 DB가 없습니다: {db_path}. import_excel.py를 먼저 실행하세요.")
     db = sqlite3.connect(db_path, timeout=30)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA busy_timeout = 30000")
     try:
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA busy_timeout = 30000")
         ensure_receipt_schema(db)
         db.commit()
-    except Exception:
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    finally:
         db.close()
-        raise
-    return db
 
 
 def _yn(value: str | None) -> int | None:
@@ -307,6 +316,22 @@ def confirm_issued(db_path: Path, transaction_id: int, approval_no: str, issued_
             raise ValueError("엑셀로 내보낸 거래만 홈택스 발급 확인 후 ISSUED로 변경할 수 있습니다.")
 
 
+def reset_unissued(db_path: Path, transaction_id: int, reason: str) -> None:
+    """Explicitly reopen a rejected/unissued export; NEVER reset ISSUED items."""
+    if not reason.strip():
+        raise ValueError("재작업 사유를 입력하세요. 홈택스에서 미발급 상태인지 먼저 확인해야 합니다.")
+    if len(reason) > 250:
+        raise ValueError("재작업 사유는 250자 이하로 입력하세요.")
+    with _db_connect(db_path) as db:
+        cursor = db.execute("""UPDATE transactions
+            SET receipt_status='PENDING', receipt_exported_at=NULL,
+                receipt_reset_at=?, receipt_reset_reason=?
+            WHERE id=? AND receipt_status='EXPORTED'""",
+            (datetime.now(timezone.utc).isoformat(timespec="seconds"), reason.strip(), transaction_id))
+        if cursor.rowcount != 1:
+            raise ValueError("이미 발급완료된 거래나 미출력 거래는 재작업으로 되돌릴 수 없습니다.")
+
+
 def list_deposits(db_path: Path) -> None:
     with _db_connect(db_path) as db:
         rows = db.execute("""SELECT id, transaction_at, amount_krw, receipt_requested,
@@ -342,6 +367,10 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--id", type=int, required=True)
     c.add_argument("--approval-no", required=True)
     c.add_argument("--issued-on", required=True, help="홈택스 실제 발급일 YYYY-MM-DD")
+    reset = cmds.add_parser("reset", help="홈택스에서 미발급을 확인한 EXPORTED 거래만 재작업")
+    reset.add_argument("--id", type=int, required=True)
+    reset.add_argument("--reason", required=True, help="홈택스 검증오류 등 재작업 사유")
+    reset.add_argument("--confirmed-not-issued", action="store_true", help="홈택스 미발급 확인 필수")
     args = parser.parse_args(argv)
     try:
         if args.action == "list":
@@ -356,9 +385,14 @@ def main(argv: list[str] | None = None) -> int:
                                     retry_exported=args.retry_exported)
             print(f"[OK] {count}건 홈택스 엑셀 작성: {args.output.resolve()}")
             print("[주의] 엑셀 생성만 완료되었습니다. 홈택스 실제 발급 완료가 아닙니다.")
-        else:
+        elif args.action == "confirm":
             confirm_issued(args.db, args.id, args.approval_no, args.issued_on)
             print(f"[OK] 거래 {args.id}번 발급완료 기록")
+        else:
+            if not args.confirmed_not_issued:
+                raise ValueError("홈택스에서 미발급 상태를 확인한 후 --confirmed-not-issued를 지정하세요.")
+            reset_unissued(args.db, args.id, args.reason)
+            print(f"[OK] 거래 {args.id}번 재작업 대기 상태로 복원")
         return 0
     except (OSError, ValueError, sqlite3.Error, ET.ParseError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
