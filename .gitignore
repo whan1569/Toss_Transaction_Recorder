@@ -1,0 +1,13 @@
+# Bank statements, transaction databases, and secrets must stay local.
+*.xlsx
+*.xls
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+.env
+.env.*
+__pycache__/
+*.pyc
+.venv/
